@@ -1,0 +1,76 @@
+name: Release Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch name to run the workflow on'
+        required: true
+  push:
+    branches:
+      - main
+
+jobs:
+  create-release-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.before }}  # This will be the commit before the push
+
+      - name: Set up Git
+        run: git config user.email "${{ secrets.GITHUB_EMAIL }}" && git config user.name "${{ secrets.GITHUB_USERNAME }}"
+
+      - name: Get feature branch name
+        id: get_branch_name
+        run: echo "::set-output name=branch_name::$(git symbolic-ref --short HEAD)"
+
+      - name: Create Release Branch
+        run: |
+          git checkout -b "release-feature-${{ github.event.inputs.branch }}-$(date +'%m%d%Y')"
+          git push --set-upstream origin "release-feature-${{ github.event.inputs.branch }}-$(date +'%m%d%Y')"
+
+  test-release-branch:
+    needs: create-release-branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v2
+        with:
+          ref: "refs/heads/release-feature-${{ github.event.inputs.branch }}"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: 14
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
+
+  deploy-to-production:
+    needs: test-release-branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v2
+        with:
+          ref: "refs/heads/release-feature-${{ github.event.inputs.branch }}"
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.YOUR_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H your-server-ip-or-domain >> ~/.ssh/known_hosts
+
+      - name: Deploy to Production
+        run: |
+          scp -r ./* your-username@your-server-ip-or-domain:/path/to/your/project
+          ssh your-username@your-server-ip-or-domain "bash -s" < deploy.sh ${{ github.event.inputs.branch }}
+        env:
+          NODE_ENV: production
+        shell: bash
